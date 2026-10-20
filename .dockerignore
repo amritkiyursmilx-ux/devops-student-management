@@ -1,0 +1,21 @@
+# Git
+.git/
+.gitignore
+
+# Maven wrapper and caches
+.mvn/
+data/
+target/classes/
+target/generated-sources/
+target/generated-test-sources/
+target/maven-status/
+target/surefire-reports/
+target/test-classes/
+target/*.jar.original
+
+# Project documentation & scripts
+*.md
+*.cmd
+.idea/
+*.iml
+.vscode/
