@@ -299,7 +299,7 @@ body {
     color: var(--accent-blue);
 }
 
-.student-name { font-weight: 600; }
+.student-name { font-weight: 600; color: #1F2937; }
 
 .email-text {
     color: var(--text-secondary);
