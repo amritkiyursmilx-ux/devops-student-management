@@ -10,8 +10,8 @@ pipeline {
     parameters {
         booleanParam(
             name: 'DEPLOY',
-            defaultValue: false,
-            description: 'Replace the running student-management-app container after the build succeeds. Requires approval.'
+            defaultValue: true,
+            description: 'Deploy the updated application container to port 8081 after tests pass.'
         )
     }
 
@@ -20,13 +20,13 @@ pipeline {
         CONTAINER_NAME = 'student-management-app'
         HOST_PORT      = '8081'
         CONTAINER_PORT = '8080'
-        DATA_VOLUME    = 'student-management_data'
+        DATA_VOLUME    = 'student-data'
     }
 
     stages {
         stage('Checkout') {
             steps {
-                echo 'Checking out the configured GitHub branch.'
+                echo '=== Stage 1: Checkout Source Code from GitHub ==='
                 checkout scm
                 script {
                     if (isUnix()) {
@@ -38,14 +38,41 @@ pipeline {
             }
         }
 
-        stage('Build & Compile') {
+        stage('Verify Environment') {
             steps {
-                echo 'Building from the repository root with the agent-installed Maven.'
+                echo '=== Stage 2: Verify Java, Maven, and Docker Environment ==='
+                script {
+                    if (isUnix()) {
+                        sh '''
+                            echo "--- Java Version ---"
+                            java -version
+                            echo "--- Maven Version ---"
+                            mvn -version
+                            echo "--- Docker Version ---"
+                            docker version
+                        '''
+                    } else {
+                        bat '''
+                            @echo --- Java Version ---
+                            @java -version
+                            @echo --- Maven Version ---
+                            @call mvnw.cmd -v
+                            @echo --- Docker Version ---
+                            @docker version
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Compile Application') {
+            steps {
+                echo '=== Stage 3: Compile Application ==='
                 script {
                     if (isUnix()) {
                         sh 'mvn --batch-mode --no-transfer-progress clean compile'
                     } else {
-                        bat 'mvn --batch-mode --no-transfer-progress clean compile'
+                        bat 'call mvnw.cmd --batch-mode clean compile'
                     }
                 }
             }
@@ -53,12 +80,12 @@ pipeline {
 
         stage('Execute Tests') {
             steps {
-                echo 'Running the automated unit and web-layer tests.'
+                echo '=== Stage 4: Execute Automated Tests ==='
                 script {
                     if (isUnix()) {
                         sh 'mvn --batch-mode --no-transfer-progress test'
                     } else {
-                        bat 'mvn --batch-mode --no-transfer-progress test'
+                        bat 'call mvnw.cmd --batch-mode test'
                     }
                 }
             }
@@ -71,12 +98,12 @@ pipeline {
 
         stage('Package JAR') {
             steps {
-                echo 'Packaging the executable Spring Boot JAR.'
+                echo '=== Stage 5: Package Spring Boot Application ==='
                 script {
                     if (isUnix()) {
                         sh 'mvn --batch-mode --no-transfer-progress package -DskipTests'
                     } else {
-                        bat 'mvn --batch-mode --no-transfer-progress package -DskipTests'
+                        bat 'call mvnw.cmd --batch-mode package -DskipTests'
                     }
                 }
             }
@@ -87,9 +114,9 @@ pipeline {
             }
         }
 
-        stage('Docker Build') {
+        stage('Build Docker Image') {
             steps {
-                echo 'Building commit-specific and build-number Docker tags.'
+                echo '=== Stage 6: Build Docker Image ==='
                 script {
                     if (isUnix()) {
                         sh 'docker build -t ${IMAGE_NAME}:b${BUILD_NUMBER} -t ${IMAGE_NAME}:${GIT_COMMIT_SHORT} -t ${IMAGE_NAME}:latest .'
@@ -100,72 +127,86 @@ pipeline {
             }
         }
 
-        stage('Docker Deploy') {
+        stage('Deploy Container') {
             when {
                 expression { params.DEPLOY }
             }
             steps {
+                echo '=== Stage 7: Deploy Updated Application Container ==='
                 script {
-                    if (!isUnix()) {
-                        error('Deployment requires the configured Linux Jenkins container agent.')
+                    if (isUnix()) {
+                        sh '''
+                            set -eu
+                            selected_volume="$DATA_VOLUME"
+                            if docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+                                existing_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$CONTAINER_NAME")
+                                if [ -n "$existing_volume" ]; then
+                                    selected_volume="$existing_volume"
+                                fi
+                            fi
+
+                            docker volume create "$selected_volume" >/dev/null
+
+                            if docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+                                echo "Stopping and removing existing container $CONTAINER_NAME..."
+                                docker stop "$CONTAINER_NAME" || true
+                                docker rm "$CONTAINER_NAME" || true
+                            fi
+
+                            echo "Deploying new container $CONTAINER_NAME with volume $selected_volume..."
+                            docker run -d \\
+                                --name "$CONTAINER_NAME" \\
+                                --restart unless-stopped \\
+                                -p "$HOST_PORT:$CONTAINER_PORT" \\
+                                -v "$selected_volume:/app/data" \\
+                                -e SPRING_PROFILES_ACTIVE=docker \\
+                                -e SERVER_PORT="$CONTAINER_PORT" \\
+                                "$IMAGE_NAME:$GIT_COMMIT_SHORT"
+                        '''
+                    } else {
+                        bat '''
+                            @docker stop %CONTAINER_NAME% 2>nul || ver >nul
+                            @docker rm %CONTAINER_NAME% 2>nul || ver >nul
+                            @docker run -d --name %CONTAINER_NAME% --restart unless-stopped -p %HOST_PORT%:%CONTAINER_PORT% -v %DATA_VOLUME%:/app/data -e SPRING_PROFILES_ACTIVE=docker -e SERVER_PORT=%CONTAINER_PORT% %IMAGE_NAME%:%GIT_COMMIT_SHORT%
+                        '''
                     }
                 }
-                timeout(time: 5, unit: 'MINUTES') {
-                    input message: 'This will stop and replace the running student-management-app container on port 8081. Continue?', ok: 'Deploy'
-                }
-                sh '''
-                    set -eu
-
-                    selected_volume="$DATA_VOLUME"
-                    if docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-                        existing_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$CONTAINER_NAME")
-                        if [ -n "$existing_volume" ]; then
-                            selected_volume="$existing_volume"
-                        fi
-                    fi
-
-                    docker volume create "$selected_volume" >/dev/null
-
-                    if docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-                        docker stop "$CONTAINER_NAME"
-                        docker rm "$CONTAINER_NAME"
-                    fi
-
-                    docker run -d \\
-                        --name "$CONTAINER_NAME" \\
-                        --restart unless-stopped \\
-                        -p "$HOST_PORT:$CONTAINER_PORT" \\
-                        -v "$selected_volume:/app/data" \\
-                        -e SPRING_PROFILES_ACTIVE=docker \\
-                        -e SERVER_PORT="$CONTAINER_PORT" \\
-                        "$IMAGE_NAME:$GIT_COMMIT_SHORT"
-                '''
             }
         }
 
-        stage('Health Check') {
+        stage('Verify Application Health') {
             when {
                 expression { params.DEPLOY }
             }
             steps {
-                echo 'Waiting up to 60 seconds for the deployed app to report UP.'
-                sh '''
-                    set -eu
-                    attempt=1
-                    while [ "$attempt" -le 30 ]; do
-                        if response=$(curl --silent --show-error --fail "http://localhost:$HOST_PORT/actuator/health" 2>/dev/null); then
-                            if printf '%s' "$response" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"'; then
-                                printf '%s\\n' "$response"
-                                exit 0
-                            fi
-                        fi
-                        sleep 2
-                        attempt=$((attempt + 1))
-                    done
-                    docker logs --tail 80 "$CONTAINER_NAME" || true
-                    echo 'Health check failed.'
-                    exit 1
-                '''
+                echo '=== Stage 8: Verify Application Health After Deployment ==='
+                script {
+                    if (isUnix()) {
+                        sh '''
+                            set -eu
+                            echo "Waiting up to 60 seconds for application to report UP on http://localhost:$HOST_PORT/actuator/health..."
+                            attempt=1
+                            while [ "$attempt" -le 30 ]; do
+                                if response=$(curl --silent --show-error --fail "http://localhost:$HOST_PORT/actuator/health" 2>/dev/null); then
+                                    if printf '%s' "$response" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"'; then
+                                        echo "Health Check PASSED: Application is UP!"
+                                        printf '%s\\n' "$response"
+                                        exit 0
+                                    fi
+                                fi
+                                sleep 2
+                                attempt=$((attempt + 1))
+                            done
+                            echo "Health check failed! Showing container logs:"
+                            docker logs --tail 80 "$CONTAINER_NAME" || true
+                            exit 1
+                        '''
+                    } else {
+                        bat '''
+                            @powershell -Command "for ($i = 1; $i -le 30; $i++) { Start-Sleep -Seconds 2; try { $res = Invoke-RestMethod -Uri 'http://localhost:%HOST_PORT%/actuator/health' -TimeoutSec 3; if ($res.status -eq 'UP') { Write-Host 'Health Check PASSED: Application is UP'; exit 0 } } catch { } }; Write-Error 'Health check failed'; exit 1"
+                        '''
+                    }
+                }
             }
         }
     }
@@ -176,10 +217,10 @@ pipeline {
             echo 'Pipeline execution completed.'
         }
         success {
-            echo "PIPELINE SUCCESS: ${env.JOB_NAME} [Build #${env.BUILD_NUMBER}] completed."
+            echo "PIPELINE SUCCESS: ${env.JOB_NAME} [Build #${env.BUILD_NUMBER}] successfully built, tested, containerized, and deployed!"
         }
         failure {
-            echo "PIPELINE FAILED: ${env.JOB_NAME} [Build #${env.BUILD_NUMBER}]. Inspect the stage logs."
+            echo "PIPELINE FAILED: ${env.JOB_NAME} [Build #${env.BUILD_NUMBER}]. Inspect stage logs."
         }
     }
 }
