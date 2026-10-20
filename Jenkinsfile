@@ -8,13 +8,11 @@ pipeline {
         PORT            = '8080'
     }
 
-    tools {
-        // Points to JDK configured in Jenkins Global Tool Configuration
-        // Name must match the tool name in Jenkins (e.g., 'JDK21' or 'Java21')
-        jdk 'JDK21'
-        // Points to Maven configured in Jenkins Global Tool Configuration
-        maven 'Maven3'
-    }
+    // Java 21, Maven 3.9, and Docker CLI are pre-installed in the Jenkins environment
+    // tools {
+    //     jdk 'JDK21'
+    //     maven 'Maven3'
+    // }
 
     stages {
         // -------------------------------------------------------------
