@@ -17,4 +17,11 @@ RUN apt-get update && \
 # it far more privilege than the pipeline needs.
 RUN groupadd -f docker && usermod -aG docker jenkins
 
-USER jenkins
+# The entrypoint repairs the Docker socket ownership at start-up (Docker
+# Desktop resets it to root:root on every WSL2 restart) and then drops back
+# to the unprivileged 'jenkins' user.
+COPY entrypoint.sh /usr/local/bin/jenkins-entrypoint.sh
+RUN chmod +x /usr/local/bin/jenkins-entrypoint.sh
+
+USER root
+ENTRYPOINT ["/usr/local/bin/jenkins-entrypoint.sh"]
