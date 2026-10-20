@@ -24,6 +24,12 @@ pipeline {
         // normally reuses whatever volume the current container already has, so
         // this default never orphans existing data.
         DATA_VOLUME    = 'student-management_student-data'
+        // Hostname used by the health-check stage.
+        //   - Jenkins on the Windows host          -> localhost
+        //   - Jenkins inside a container (this setup) -> host.docker.internal
+        // A containerised Jenkins has its own "localhost", so the published port
+        // on the Windows host is reachable only through host.docker.internal.
+        HEALTH_HOST    = 'host.docker.internal'
     }
 
     stages {
@@ -186,10 +192,10 @@ pipeline {
                     if (isUnix()) {
                         sh '''
                             set -eu
-                            echo "Waiting up to 90 seconds for the application to report UP on http://localhost:${HOST_PORT}/actuator/health..."
+                            echo "Waiting up to 90 seconds for the application to report UP on http://${HEALTH_HOST}:${HOST_PORT}/actuator/health..."
                             attempt=1
                             while [ "$attempt" -le 45 ]; do
-                                if response=$(curl --silent --fail "http://localhost:${HOST_PORT}/actuator/health" 2>/dev/null); then
+                                if response=$(curl --silent --fail "http://${HEALTH_HOST}:${HOST_PORT}/actuator/health" 2>/dev/null); then
                                     if printf '%s' "$response" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"'; then
                                         echo "Health check PASSED: application is UP."
                                         printf '%s\\n' "$response"
