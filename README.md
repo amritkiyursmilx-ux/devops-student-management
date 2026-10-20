@@ -47,6 +47,7 @@ This project solves these issues by automating the software delivery lifecycle u
 | **Build Tool** | Apache Maven & Maven Wrapper | 3.9.x | Dependency management & lifecycle build |
 | **Testing Framework** | JUnit 5 & Mockito & MockMvc | Latest Spring Boot | Unit & integration test suite |
 | **Version Control** | Git & GitHub | 2.x | Source control & commit tracking |
+| **Credential Management** | Git Credential Manager | 2.9.1 | Browser-based GitHub sign-in, token never stored in the repo |
 | **CI/CD Orchestration**| Jenkins LTS | 2.x | Automated multi-stage pipeline runner |
 | **Containerization** | Docker Desktop & Docker Engine | 29.x | Containerization & local deployment |
 
@@ -62,17 +63,18 @@ flowchart LR
     Git -->|Webhook / Polling| Jenkins[Jenkins CI/CD]
     
     subgraph Pipeline [Jenkins Pipeline Execution]
-        S1[1. Checkout] --> S2[2. Build & Compile]
-        S2 --> S3[3. Automated Tests]
-        S3 --> S4[4. Package JAR]
-        S4 --> S5[5. Docker Build]
-        S5 --> S6[6. Docker Deploy]
-        S6 --> S7[7. Health Check]
+        S1[1. Checkout] --> S2[2. Verify Environment]
+        S2 --> S3[3. Compile Application]
+        S3 --> S4[4. Execute Tests]
+        S4 --> S5[5. Package JAR]
+        S5 --> S6[6. Build Docker Image]
+        S6 --> S7[7. Deploy Container]
+        S7 --> S8[8. Verify Application Health]
     end
     
     Jenkins --> Pipeline
-    S7 -->|Pass| Success[Application Live :8080]
-    S3 -.->|Fail| Halt[Pipeline Halted & Test Report Generated]
+    S8 -->|Pass| Success[Application Live :8081]
+    S4 -.->|Fail| Halt[Pipeline Halted & Test Report Generated]
 ```
 
 ---
@@ -95,38 +97,41 @@ flowchart LR
 
 ```text
 student-management/
-├── .mvn/wrapper/                  # Maven Wrapper binaries & properties
+├── .mvn/wrapper/                          # Maven Wrapper binaries & properties
 ├── src/
 │   ├── main/
 │   │   ├── java/com/devops/studentmgmt/
 │   │   │   ├── StudentManagementApplication.java  # Main application entrypoint
 │   │   │   ├── controller/
-│   │   │   │   └── StudentController.java         # REST endpoints (/api/students)
-│   │   │   ├── entity/
+│   │   │   │   └── StudentController.java         # REST endpoints + validation error handling
+│   │   │   ├── model/
 │   │   │   │   └── Student.java                   # JPA Entity with Bean Validation
-│   │   │   ├── exception/
-│   │   │   │   └── GlobalExceptionHandler.java    # Centralized REST error handling
 │   │   │   ├── repository/
 │   │   │   │   └── StudentRepository.java         # Spring Data JPA queries
 │   │   │   └── service/
 │   │   │       ├── StudentService.java            # Business logic contract
-│   │   │       └── impl/StudentServiceImpl.java   # Business logic implementation
+│   │   │       └── StudentServiceImpl.java        # Business logic implementation
 │   │   └── resources/
 │   │       ├── application.properties             # H2 DB & Actuator configuration
+│   │       ├── application-docker.properties      # Docker profile (file-based H2 in /app/data)
 │   │       └── static/
-│   │           └── index.html                     # Responsive Bootstrap 5 UI
+│   │           ├── index.html                     # Responsive Bootstrap 5 UI
+│   │           ├── css/style.css                  # Custom styling
+│   │           └── js/app.js                      # Dashboard, search & CRUD (event delegation)
 │   └── test/
-│       └── java/com/devops/studentmgmt/
-│           ├── controller/
-│           │   └── StudentControllerTest.java     # 9 MockMvc API tests
-│           └── service/
-│               └── StudentServiceTest.java        # 8 Mockito unit tests
+│       ├── java/com/devops/studentmgmt/
+│       │   ├── StudentServiceTest.java            # 8 Mockito unit tests
+│       │   ├── StudentControllerTest.java         # 9 MockMvc API tests
+│       │   └── StudentIntegrationTest.java        # 23 @SpringBootTest end-to-end tests
+│       └── resources/
+│           └── application.properties             # In-memory H2 config for tests
 ├── .dockerignore                  # Docker context exclusions
 ├── .gitignore                     # Git tracking exclusions
 ├── docker-compose.yml             # Single-command Docker Compose specification
 ├── Dockerfile                     # Optimized Alpine JRE 21 container spec
 ├── Jenkinsfile                    # Declarative multi-stage CI/CD pipeline
-├── mvnw.cmd                       # Maven wrapper script for Windows
+├── env.bat / env.ps1              # JDK 21 auto-detect helpers for the local shell
+├── mvnw / mvnw.cmd                # Maven wrapper for Linux agents / Windows
 └── pom.xml                        # Maven project dependencies and build plugins
 ```
 
@@ -153,16 +158,28 @@ Docker Desktop on Windows 11 requires the Windows Subsystem for Linux (WSL 2) ba
    docker ps
    ```
 
-### 3. Jenkins LTS
-1. Download Jenkins Generic Java package (`jenkins.war`) from [jenkins.io](https://www.jenkins.io/download/) or run via Docker:
-   ```powershell
-   docker run -d -p 8085:8080 -p 50000:50000 --name jenkins-server -v jenkins_home:/var/jenkins_home jenkins/jenkins:lts
-   ```
-2. Or run natively on Windows via Java:
-   ```powershell
-   java -jar jenkins.war --httpPort=8085
-   ```
-3. Open `http://localhost:8085` in your browser and complete the initial setup wizard.
+### 3. Jenkins LTS (Docker)
+Jenkins runs as a container in this project, with the Docker socket mounted so the pipeline can build and deploy images:
+
+```powershell
+cd d:\robot_simulation\devops\jenkins
+docker compose up -d
+```
+
+This publishes Jenkins on `http://localhost:9090` (agent port `50000`) and mounts `/var/run/docker.sock` into the container. Wait for the container to report healthy, then open `http://localhost:9090`, unlock it with the initial admin password from the container log, and complete the setup wizard:
+
+```powershell
+# Retrieve the initial admin password
+docker exec jenkins-server cat /var/jenkins_home/secrets/initialAdminPassword
+```
+
+To run Jenkins natively instead (Windows service or `jenkins.war`), use:
+
+```powershell
+java -jar jenkins.war --httpPort=9090
+```
+
+Note: a natively installed Jenkins on Windows cannot reach the Docker Desktop Linux engine unless the socket is exposed, which is why the containerized setup above is used.
 
 ---
 
@@ -202,16 +219,20 @@ cd d:\robot_simulation\devops\student-management
 # Build Docker container image
 docker build -t student-management:1.0.0 -t student-management:latest .
 ```
-
 ### 2. Run the Docker Container
+
 ```powershell
 # Run container with port forwarding and volume persistence
 docker run -d `
   --name student-management-app `
-  -p 8080:8080 `
-  -v student-data:/app/data `
+  --restart unless-stopped `
+  -p 8081:8080 `
+  -v student-management_student-data:/app/data `
+  -e SPRING_PROFILES_ACTIVE=docker `
   student-management:latest
 ```
+
+The application is then reachable at `http://localhost:8081` (host port `8081` ➔ container port `8080`). The named volume `student-management_student-data` keeps the H2 database in `/app/data` so data survives container recreation.
 
 ### 3. Using Docker Compose (Simplest)
 ```powershell
@@ -233,7 +254,7 @@ docker compose down
 ## 11. Jenkins Setup & Pipeline Configuration
 
 ### Step 1: Install Required Plugins
-In Jenkins (`http://localhost:8085`):
+In Jenkins (`http://localhost:9090`):
 1. Navigate to **Manage Jenkins > Plugins > Available Plugins**.
 2. Install the following plugins:
    - **Pipeline**
@@ -253,10 +274,13 @@ In Jenkins (`http://localhost:8085`):
    https://github.com/amritkiyursmilx-ux/devops-student-management.git
 4. Set **Branch Specifier** to ***/main** and **Script Path** to **Jenkinsfile** (the repository root).
 5. The repository is public, so no Jenkins credential is required. If it becomes private, select a credential from Jenkins Credentials; never paste a token into the Jenkinsfile.
-6. Click **Save**.### Step 4: Run the Pipeline
+6. Under **Triggers**, tick **Poll SCM** and enter the schedule `H/5 * * * *` so a new push to `main` is picked up automatically every 5 minutes.
+7. Click **Save**.
+
+### Step 4: Run the Pipeline
 1. Click **Build Now** in the left sidebar.
 2. Observe each stage progress in the **Stage View**:
-   - `Checkout` ➔ `Build & Compile` ➔ `Execute Tests` ➔ `Package JAR` ➔ `Docker Build` ➔ `Docker Deploy` ➔ `Health Check`.
+   - `Checkout` ➔ `Verify Environment` ➔ `Compile Application` ➔ `Execute Tests` ➔ `Package JAR` ➔ `Build Docker Image` ➔ `Deploy Container` ➔ `Verify Application Health`.
 3. View the JUnit test trends and archived `.jar` artifacts in the build summary.
 
 ---
@@ -265,96 +289,68 @@ In Jenkins (`http://localhost:8085`):
 
 The project remote is https://github.com/amritkiyursmilx-ux/devops-student-management.git, on branch **main**. Configure the Jenkins job to use **Pipeline script from SCM**, branch ***/main**, and script path **Jenkinsfile**.
 
-To trigger builds automatically, enable **GitHub hook trigger for GITScm polling** in the job and configure a GitHub push webhook at http://<reachable-jenkins-host>:9090/github-webhook/. GitHub must be able to reach that address; localhost is not reachable from GitHub. For a Jenkins server that stays local, use **Poll SCM** instead. Keep Jenkins behind an authenticated, protected endpoint.## 13. Testing Instructions
+### Pushing Code to GitHub
 
-### Executing Automated Tests
+GitHub no longer accepts account passwords for Git operations. This machine uses **Git Credential Manager (GCM)**, so the first push opens a browser window for a one-time GitHub sign-in and then caches the credential in Windows Credential Manager:
+
 ```powershell
-# Run the complete test suite
-.\mvnw.cmd test
+# Verify the credential helper is active
+git config --get-all credential.helper
+
+# Push the current branch (a browser sign-in prompt appears on first use)
+git push -u origin main
 ```
 
-### Inspecting Test Reports
-Maven writes XML and text test reports to:
-- `target/surefire-reports/com.devops.studentmgmt.service.StudentServiceTest.txt`
-- `target/surefire-reports/com.devops.studentmgmt.controller.StudentControllerTest.txt`
+The token is never written into the repository, the `Jenkinsfile`, or any config file.
 
-### Tested Scenarios
-| Test Class | Test Case | Target Behavior |
+### Triggering Builds Automatically
+
+Two trigger options are available:
+
+| Trigger | How it works | When to use it |
 |---|---|---|
-| `StudentServiceTest` | `testCreateStudent_Success` | Successfully creates and persists student |
-| `StudentServiceTest` | `testCreateStudent_DuplicateEmail` | Throws exception when duplicate email is provided |
-| `StudentServiceTest` | `testGetStudentById_NotFound` | Handles invalid ID with ResourceNotFoundException |
-| `StudentServiceTest` | `testUpdateStudent_Success` | Updates existing student attributes |
-| `StudentServiceTest` | `testDeleteStudent_Success` | Deletes student by ID |
-| `StudentServiceTest` | `testSearchStudents` | Finds students matching partial name or dept |
-| `StudentControllerTest`| `testCreateStudent_Success` | Returns HTTP 201 Created with JSON body |
-| `StudentControllerTest`| `testCreateStudent_ValidationErrors` | Returns HTTP 400 Bad Request with field errors |
-| `StudentControllerTest`| `testGetAllStudents` | Returns HTTP 200 OK with student array |
-| `StudentControllerTest`| `testSearchStudents` | Returns HTTP 200 OK with filtered results |
-| `StudentControllerTest`| `testDeleteStudent` | Returns HTTP 200 OK confirmation message |
+| **Poll SCM** (`H/5 * * * *`) | Jenkins checks GitHub every 5 minutes for new commits on `main` and builds automatically | Jenkins runs on a local machine that GitHub cannot reach |
+| **GitHub hook trigger** | GitHub POSTs to `http://<reachable-jenkins-host>:9090/github-webhook/` on every push | Jenkins is reachable from the internet (e.g. via a tunnel or a self-hosted runner) |
 
----
+**Poll SCM is the trigger configured in this project**, because the Jenkins server runs on `localhost` and GitHub cannot reach that address. The job is set to **Pipeline script from SCM** with branch `*/main`, so a new push to `main` is picked up automatically on the next poll.
 
-## 14. API Endpoints & Expected Outputs
-
-| Method | Endpoint | Description | Sample Request Body / Parameter | Expected Status |
-|---|---|---|---|---|
-| `GET` | `/api/students` | Get all students | None | `200 OK` |
-| `GET` | `/api/students/{id}` | Get student by ID | Path variable `id=1` | `200 OK` / `404 Not Found` |
-| `POST` | `/api/students` | Create student | `{"fullName":"Ramesh Kumar","email":"ramesh@cs.edu","department":"Computer Science","semester":3}` | `201 Created` |
-| `PUT` | `/api/students/{id}` | Update student | `{"fullName":"Ramesh Kumar","email":"ramesh@cs.edu","department":"Computer Science","semester":4}` | `200 OK` |
-| `DELETE` | `/api/students/{id}` | Delete student | Path variable `id=1` | `200 OK` |
-| `GET` | `/api/students/search` | Search students | `?query=Computer` | `200 OK` |
-| `GET` | `/api/students/count` | Total count | None | `200 OK` (`3`) |
-| `GET` | `/actuator/health` | Health Check | None | `200 OK` (`{"status":"UP"}`) |
-
----
-
-## 15. Common Errors & Troubleshooting
-
-1. **Port 8080 already in use**:
-   - Cause: Another instance of Spring Boot or Tomcat is running.
-   - Solution: Stop existing process or run `Get-Process -Id (Get-NetTCPConnection -LocalPort 8080).OwningProcess | Stop-Process -Force`.
-2. **`docker : failed to connect to the docker API`**:
-   - Cause: Docker Desktop is stopped or WSL 2 is not enabled.
-   - Solution: Run `wsl --install` in an Administrator PowerShell, reboot, and launch Docker Desktop from Start Menu.
-3. **Jenkins tool not found (`JDK21` / `Maven3`)**:
-   - Cause: Tool names in `Jenkinsfile` don't match names configured under **Manage Jenkins > Tools**.
-   - Solution: Ensure the names in Jenkins Global Tool Configuration match `JDK21` and `Maven3` exactly.
-4. **UTF-8 Byte Order Mark (BOM) compilation error**:
-   - Cause: Windows PowerShell `Set-Content` writing UTF-8 with BOM prefix.
-   - Solution: Ensure files are saved with pure UTF-8 without BOM (already configured in this repository).
-
----
-
-## 16. Future Enhancements
-
-1. **Kubernetes Deployment**: Add Helm charts and Kubernetes manifests (`deployment.yaml`, `service.yaml`) for container orchestration.
-2. **Static Code Analysis**: Integrate **SonarQube** in the Jenkins pipeline to enforce code quality and security scanning.
-3. **Container Vulnerability Scanning**: Add **Trivy** scanning stage before Docker image deployment.
-4. **Cloud Deployment**: Automate pushing container images to Docker Hub or AWS ECR and deploying to AWS ECS / Google Cloud Run.
+To switch to a webhook instead, enable **GitHub hook trigger for GITScm polling** in the job and add a GitHub push webhook pointing at the Jenkins URL above. Keep Jenkins behind an authenticated, protected endpoint, and always use Jenkins Credentials for secrets - never paste a token into the `Jenkinsfile`.
 
 ---
 
 ## 13. Testing Instructions
 
 ### Run Unit & Integration Tests (Locally)
+
 ```powershell
 cd student-management
 .\mvnw.cmd test
 ```
 
-### Run Tests with Coverage Report
+### Run the Full Verify Lifecycle (what the pipeline runs)
+
 ```powershell
-cd student-management
-.\mvnw.cmd test jacoco:report  # If JaCoCo is configured
+.\mvnw.cmd clean verify
 ```
 
-### Test Reports
-- **Surefire Reports**: `target/surefire-reports/*.xml` and `*.txt`
-- **Jenkins**: JUnit results are published automatically in the pipeline
+### Run Tests with Coverage Report
+
+```powershell
+.\mvnw.cmd test jacoco:report   # If JaCoCo is configured
+```
+
+### Inspecting Test Reports
+
+Maven writes XML and text test reports to:
+
+- `target/surefire-reports/com.devops.studentmgmt.service.StudentServiceTest.txt`
+- `target/surefire-reports/com.devops.studentmgmt.controller.StudentControllerTest.txt`
+- `target/surefire-reports/com.devops.studentmgmt.StudentIntegrationTest.txt`
+
+The pipeline publishes these as JUnit results, so they are viewable from the **Test Result** link on the build page.
 
 ### Manual API Testing (curl/PowerShell)
+
 ```powershell
 # Get all students
 Invoke-RestMethod -Uri http://localhost:8081/api/students
@@ -369,15 +365,45 @@ Invoke-RestMethod -Uri "http://localhost:8081/api/students/search?query=John"
 Invoke-RestMethod -Uri http://localhost:8081/actuator/health
 ```
 
----
+### Tested Scenarios
 
-## 14. Expected Outputs
+| Test Class | Test Case | Target Behavior |
+|---|---|---|
+| `StudentServiceTest` | `testCreateStudent_Success` | Successfully creates and persists student |
+| `StudentServiceTest` | `testCreateStudent_DuplicateEmail` | Throws exception when duplicate email is provided |
+| `StudentServiceTest` | `testGetStudentById_NotFound` | Handles invalid ID with ResourceNotFoundException |
+| `StudentServiceTest` | `testUpdateStudent_Success` | Updates existing student attributes |
+| `StudentServiceTest` | `testDeleteStudent_Success` | Deletes student by ID |
+| `StudentServiceTest` | `testSearchStudents` | Finds students matching partial name or dept |
+| `StudentControllerTest`| `testCreateStudent_Success` | Returns HTTP 201 Created with JSON body |
+| `StudentControllerTest`| `testCreateStudent_ValidationErrors` | Returns HTTP 400 Bad Request with field errors |
+| `StudentControllerTest`| `testGetAllStudents` | Returns HTTP 200 OK with student array |
+| `StudentControllerTest`| `testSearchStudents` | Returns HTTP 200 OK with filtered results |
+| `StudentControllerTest`| `testDeleteStudent` | Returns HTTP 200 OK confirmation message |
+| `StudentIntegrationTest` | 23 tests across `CreateTest`, `ReadTest`, `UpdateTest`, `DeleteTest`, `HealthTest` | Full-stack `@SpringBootTest` + `MockMvc` coverage of CRUD, search, count, validation and the Actuator health endpoint against a real in-memory H2 database |
+
+**Total: 40 automated tests** (8 service + 9 controller + 23 integration), all passing in the pipeline.
+
+## 14. API Endpoints & Expected Outputs
+
+| Method | Endpoint | Description | Sample Request Body / Parameter | Expected Status |
+|---|---|---|---|---|
+| `GET` | `/api/students` | Get all students | None | `200 OK` |
+| `GET` | `/api/students/{id}` | Get student by ID | Path variable `id=1` | `200 OK` / `404 Not Found` |
+| `POST` | `/api/students` | Create student | `{"fullName":"Ramesh Kumar","email":"ramesh@cs.edu","department":"Computer Science","semester":3}` | `201 Created` |
+| `PUT` | `/api/students/{id}` | Update student | `{"fullName":"Ramesh Kumar","email":"ramesh@cs.edu","department":"Computer Science","semester":4}` | `200 OK` |
+| `DELETE` | `/api/students/{id}` | Delete student | Path variable `id=1` | `200 OK` |
+| `GET` | `/api/students/search` | Search students | `?query=Computer` | `200 OK` |
+| `GET` | `/api/students/count` | Total count | None | `200 OK` (`3`) |
+| `GET` | `/actuator/health` | Health Check | None | `200 OK` (`{"status":"UP"}`) |
+
+### Expected Outputs
 
 | Action | Expected Result |
 |---|---|
-| `mvnw.cmd clean compile` | `BUILD SUCCESS` - All 6 source files compiled |
-| `mvnw.cmd test` | `BUILD SUCCESS` - 17 tests run (8 service + 9 controller), 0 failures |
-| `mvnw.cmd package` | `BUILD SUCCESS` - `target/student-management-1.0.0.jar` created |
+| `mvnw.cmd clean compile` | `BUILD SUCCESS` - All source files compiled |
+| `mvnw.cmd test` | `BUILD SUCCESS` - 40 tests run (8 service + 9 controller + 23 integration), 0 failures |
+| `mvnw.cmd clean verify` | `BUILD SUCCESS` - `target/student-management-1.0.0.jar` created (~49 MB) |
 | `docker build` | Successfully built image `student-management:1.0.0` |
 | `docker compose up -d` | Container `student-management-app` starts and becomes healthy |
 | `http://localhost:8081/actuator/health` | `{"status":"UP", "components":{"db":{"status":"UP"},...}}` |
@@ -386,39 +412,48 @@ Invoke-RestMethod -Uri http://localhost:8081/actuator/health
 
 ---
 
-## 15. Common Errors and Solutions
+## 15. Common Errors & Troubleshooting
 
 | Error | Cause | Solution |
 |---|---|---|
 | `mvn` not found | Maven not on PATH | Use `mvnw.cmd` (Maven Wrapper) instead of `mvn` |
-| Port 8081 already in use | Another process using port | Stop the process or change port in `docker-compose.yml` |
-| Docker build fails - JAR not found | JAR not packaged yet | Run `mvnw.cmd package -DskipTests` before building image |
-| Container fails to start | Wrong profile or volume issues | Ensure `SPRING_PROFILES_ACTIVE=docker` and volume mounted to `/app/data` |
-| Jenkins can't access Docker | Docker Desktop socket access issue on Windows | Use the provided `jenkins/` Docker setup with socket mounted, or run Jenkins in container. Note: Windows Jenkins service may not have Docker access. |
-| Tests fail in pipeline | Code changes break tests | Fix failing tests locally with `mvnw.cmd test` before pushing |
-| H2 data lost after container recreation | Volume not mounted | Ensure named volume `student-data` or `student-management_data` is mounted to `/app/data` |
-| Health check fails | App still starting | Increase wait time in health check (app needs ~20-30s to start) |
+| Port 8080 already in use | Another instance of Spring Boot or Tomcat is running | Stop the existing process or run `Get-Process -Id (Get-NetTCPConnection -LocalPort 8080).OwningProcess | Stop-Process -Force` |
+| Port 8081 already in use | Another process using the Docker port mapping | Stop the process or change the port in `docker-compose.yml` |
+| `docker : failed to connect to the docker API` | Docker Desktop is stopped or WSL 2 is not enabled | Run `wsl --install` in an Administrator PowerShell, reboot, and launch Docker Desktop from the Start Menu |
+| Jenkins tool not found (`JDK21` / `Maven3`) | Tool names in `Jenkinsfile` don't match the names configured under **Manage Jenkins > Tools** | Ensure the names in Jenkins Global Tool Configuration match `JDK21` and `Maven3` exactly |
+| Docker build fails - JAR not found | JAR not packaged yet | Run `mvnw.cmd package -DskipTests` before building the image |
+| Container fails to start | Wrong profile or volume issues | Ensure `SPRING_PROFILES_ACTIVE=docker` and the volume is mounted to `/app/data` |
+| Jenkins can't access Docker | Docker Desktop socket access issue on Windows | Use the provided `jenkins/` Docker setup with the socket mounted; a Windows Jenkins service may not have Docker access |
+| Tests fail in pipeline | Code changes break tests | Fix failing tests locally with `mvnw.cmd test` before pushing - the pipeline halts at the `Execute Tests` stage and the deploy stages are skipped |
+| H2 data lost after container recreation | Volume not mounted | Ensure the named volume `student-management_student-data` is mounted to `/app/data` |
+| Health check fails | App still starting | Increase the wait time in the health check stage (the app needs ~20-30s to start) |
+| `remote: Invalid username or token` | Git tried to authenticate with an account password, which GitHub no longer accepts | Use Git Credential Manager (browser sign-in) or a Personal Access Token with `Contents: Read and write` |
+| `git push` hangs with no output | Waiting for the browser sign-in window | Switch to the Edge window titled *"Confirm access and 5 more pages"* and click **Continue**, then **Authorize github** |
+| UTF-8 Byte Order Mark (BOM) compilation error | Windows PowerShell `Set-Content` writing UTF-8 with a BOM prefix | Ensure files are saved as pure UTF-8 without BOM (already configured in this repository) |
 
 ---
 
 ## 16. Future Enhancements
 
-- **Authentication & Authorization**: Add Spring Security with role-based access control
-- **Pagination & Sorting**: Implement pagination for large student datasets
-- **REST API Documentation**: Integrate Swagger/OpenAPI for API documentation
-- **Database Migration**: Use Flyway/Liquibase for schema version control
-- **Cloud Deployment**: Deploy to AWS/Azure using ECS or App Service
-- **Kubernetes Orchestration**: Scale using Kubernetes manifests (Helm charts)
-- **CI/CD Improvements**: Add SonarQube for code quality, Trivy for container scanning
-- **Email Notifications**: Add email alerts for pipeline failures
-- **Frontend Enhancement**: Migrate to a modern SPA framework if needed
+1. **Authentication & Authorization**: Add Spring Security with role-based access control.
+2. **Pagination & Sorting**: Implement pagination for large student datasets.
+3. **REST API Documentation**: Integrate Swagger / OpenAPI for API documentation.
+4. **Database Migration**: Use Flyway or Liquibase for schema version control.
+5. **Kubernetes Deployment**: Add Helm charts and Kubernetes manifests (`deployment.yaml`, `service.yaml`) for container orchestration.
+6. **Static Code Analysis**: Integrate SonarQube in the Jenkins pipeline to enforce code quality and security scanning.
+7. **Container Vulnerability Scanning**: Add a Trivy scanning stage before the Docker image deployment.
+8. **Cloud Deployment**: Automate pushing container images to Docker Hub or AWS ECR and deploying to AWS ECS / Google Cloud Run.
+9. **Email Notifications**: Add email alerts for pipeline failures.
+10. **Zero-Downtime Deployment**: Replace the single container with a rolling-update strategy using Docker Swarm, Kubernetes, or a blue/green container swap.
 
 ---
 
 ## Important Notes
 
-- **Port Mapping**: Application is accessible at `http://localhost:8081` (host) with container listening on port `8080`.
-- **Data Persistence**: H2 database is stored in a Docker volume (`/app/data`) ensuring data survives container recreation.
-- **Downtime Limitation**: Replacing a single local container causes brief downtime during deployment. This setup does **not** implement zero-downtime deployment.
-- **Health Monitoring**: Spring Boot Actuator health endpoint (`/actuator/health`) is exposed for monitoring and pipeline verification.
-- **Security**: Use Jenkins credentials store for any secrets/tokens. Never hardcode credentials in `Jenkinsfile` or source code.
+- **Port Mapping**: Application is accessible at `http://localhost:8081` (host) with the container listening on port `8080`.
+- **Data Persistence**: The H2 database is stored in the Docker volume `student-management_student-data` (mounted at `/app/data`), so data survives container recreation and redeployment.
+- **Downtime Limitation**: Replacing a single local container causes brief downtime during deployment (measured at ~11s). This setup does **not** implement zero-downtime deployment.
+- **Health Monitoring**: The Spring Boot Actuator health endpoint (`/actuator/health`) is exposed for monitoring and pipeline verification. The pipeline checks it at `http://host.docker.internal:8081/actuator/health` from inside the Jenkins container.
+- **Pipeline Stages**: 8 stages run in order - `Checkout`, `Verify Environment`, `Compile Application`, `Execute Tests`, `Package JAR`, `Build Docker Image`, `Deploy Container`, `Verify Application Health`.
+- **Build Gate**: A failing test halts the pipeline at `Execute Tests`; the image is not rebuilt and the running container is left untouched.
+- **Security**: Use the Jenkins credentials store for any secrets/tokens. Never hardcode credentials in the `Jenkinsfile` or source code.
