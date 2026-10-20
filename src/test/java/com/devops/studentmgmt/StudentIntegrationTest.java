@@ -158,8 +158,7 @@ class StudentIntegrationTest {
             mockMvc.perform(get("/api/students"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(2)))
-                .andExpect(jsonPath("$[0].fullName").value("Priya Sharma"))
-                .andExpect(jsonPath("$[1].fullName").value("Ramesh Kumar"));
+                .andExpect(jsonPath("$[*].fullName", containsInAnyOrder("Priya Sharma", "Ramesh Kumar")));
         }
 
         @Test

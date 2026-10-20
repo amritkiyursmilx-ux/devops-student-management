@@ -144,6 +144,19 @@ student-management/
 2. Install to default path (e.g. `C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot`).
 3. Set environment variable `JAVA_HOME` pointing to this directory and add `%JAVA_HOME%\bin` to your `PATH`.
 
+Alternatively, let the bundled helper locate JDK 21 for you. Both scripts search the Adoptium install directory first and then the Windows registry, and they verify every candidate with `java -version`, so a JDK 8/11/17 install can never be selected by mistake:
+
+```powershell
+# PowerShell - run from the project root
+.\env.ps1
+
+# or cmd.exe
+.\env.bat
+```
+
+Both scripts only affect the current shell session. They are a convenience for local work; the Jenkins pipeline does not use them - it builds with the agent's own `java` and the Maven Wrapper.
+
+
 ### 2. Docker Desktop & WSL 2
 Docker Desktop on Windows 11 requires the Windows Subsystem for Linux (WSL 2) backend:
 1. Open PowerShell **as Administrator** and run:
@@ -262,10 +275,16 @@ In Jenkins (`http://localhost:9090`):
    - **JUnit Plugin**
    - **Docker Pipeline** (optional if using command-line docker)
 
-### Step 2: Configure Global Tools
-1. Navigate to **Manage Jenkins > Tools**.
-2. **JDK**: Click *Add JDK*, name it `JDK21`, and uncheck *Install automatically*. Set `JAVA_HOME` to your JDK path (e.g. `C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot`).
-3. **Maven**: Click *Add Maven*, name it `Maven3`, and check *Install automatically* (select version 3.9.x).
+### Step 2: Agent Prerequisites (no Global Tools required)
+The pipeline does **not** use Jenkins Global Tool Configuration. It builds with the Java and Maven that are already present on the Jenkins agent image and resolves Maven through the checked-in **Maven Wrapper** (`mvnw` / `mvnw.cmd`).
+
+1. Confirm the agent provides **Java 21** and Maven by opening the agent's terminal and running:
+   ```powershell
+   java -version
+   mvn -version
+   ```
+2. That is all - do not add `JDK21` or `Maven3` entries under **Manage Jenkins > Tools**; the `Jenkinsfile` never references them.
+
 
 ### Step 3: Create the Pipeline Job
 1. Click **New Item**, enter **student-management-pipeline**, choose **Pipeline**, and click **OK**.
@@ -435,7 +454,6 @@ Invoke-RestMethod -Uri http://localhost:8081/actuator/health
 | Port 8080 already in use | Another instance of Spring Boot or Tomcat is running | Stop the existing process or run `Get-Process -Id (Get-NetTCPConnection -LocalPort 8080).OwningProcess | Stop-Process -Force` |
 | Port 8081 already in use | Another process using the Docker port mapping | Stop the process or change the port in `docker-compose.yml` |
 | `docker : failed to connect to the docker API` | Docker Desktop is stopped or WSL 2 is not enabled | Run `wsl --install` in an Administrator PowerShell, reboot, and launch Docker Desktop from the Start Menu |
-| Jenkins tool not found (`JDK21` / `Maven3`) | Tool names in `Jenkinsfile` don't match the names configured under **Manage Jenkins > Tools** | Ensure the names in Jenkins Global Tool Configuration match `JDK21` and `Maven3` exactly |
 | Docker build fails - JAR not found | JAR not packaged yet | Run `mvnw.cmd package -DskipTests` before building the image |
 | Container fails to start | Wrong profile or volume issues | Ensure `SPRING_PROFILES_ACTIVE=docker` and the volume is mounted to `/app/data` |
 | Jenkins can't access Docker | Docker Desktop socket access issue on Windows | Use the provided `jenkins/` Docker setup with the socket mounted; a Windows Jenkins service may not have Docker access |
@@ -468,7 +486,8 @@ Invoke-RestMethod -Uri http://localhost:8081/actuator/health
 - **Port Mapping**: Application is accessible at `http://localhost:8081` (host) with the container listening on port `8080`.
 - **Data Persistence**: The H2 database is stored in the Docker volume `student-management_student-data` (mounted at `/app/data`), so data survives container recreation and redeployment.
 - **Downtime Limitation**: Replacing a single local container causes brief downtime during deployment (measured at ~11s). This setup does **not** implement zero-downtime deployment.
-- **Health Monitoring**: The Spring Boot Actuator health endpoint (`/actuator/health`) is exposed for monitoring and pipeline verification. The pipeline checks it at `http://host.docker.internal:8081/actuator/health` from inside the Jenkins container.
+- **Health Monitoring**: The Spring Boot Actuator health endpoint (`/actuator/health`) is exposed for monitoring and pipeline verification. The pipeline checks it at `http://host.docker.internal:8081/actuator/health` from inside the Jenkins container and reads the **root** `status` field - a nested component status is never accepted as proof that the application is healthy.
+- **Deploy Rollback**: The deploy stage remembers the image that was running before the rollout. If the replacement container fails to start, or if it never reports `UP` within the health-check window, the previous image is redeployed automatically so a failed release does not leave the application offline.
 - **Pipeline Stages**: 8 stages run in order - `Checkout`, `Verify Environment`, `Compile Application`, `Execute Tests`, `Package JAR`, `Build Docker Image`, `Deploy Container`, `Verify Application Health`.
 - **Build Gate**: A failing test halts the pipeline at `Execute Tests`; the image is not rebuilt and the running container is left untouched.
 - **Security**: Use the Jenkins credentials store for any secrets/tokens. Never hardcode credentials in the `Jenkinsfile` or source code.

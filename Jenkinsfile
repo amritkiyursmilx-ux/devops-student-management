@@ -160,9 +160,18 @@ pipeline {
                     def volume = resolveDataVolume()
                     echo "Deploying with data volume: ${volume}"
 
+                    // Remember which image is currently serving traffic so the
+                    // rollout can be rolled back if the replacement fails to
+                    // start or never becomes healthy.
+                    def previousImage = currentContainerImage()
+                    env.PREVIOUS_IMAGE = previousImage
+                    env.RESOLVED_VOLUME = volume
+                    echo "Previous image: ${previousImage ?: '<none - first deployment>'}"
+
                     if (isUnix()) {
                         sh """
                             set -eu
+
                             if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
                                 echo "Stopping and removing existing container ${CONTAINER_NAME}..."
                                 docker stop "${CONTAINER_NAME}" || true
@@ -172,14 +181,29 @@ pipeline {
                             docker volume create "${volume}" >/dev/null
 
                             echo "Starting new container from ${IMAGE_NAME}:${GIT_COMMIT_SHORT}..."
-                            docker run -d \\
+                            if ! docker run -d \\
                                 --name "${CONTAINER_NAME}" \\
                                 --restart unless-stopped \\
                                 -p "${HOST_PORT}:${CONTAINER_PORT}" \\
                                 -v "${volume}:/app/data" \\
                                 -e SPRING_PROFILES_ACTIVE=docker \\
                                 -e SERVER_PORT="${CONTAINER_PORT}" \\
-                                "${IMAGE_NAME}:${GIT_COMMIT_SHORT}"
+                                "${IMAGE_NAME}:${GIT_COMMIT_SHORT}"; then
+                                echo "ERROR: the new container failed to start - rolling back."
+                                docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+                                if [ -n "${previousImage}" ]; then
+                                    echo "Restoring previous image ${previousImage}..."
+                                    docker run -d \\
+                                        --name "${CONTAINER_NAME}" \\
+                                        --restart unless-stopped \\
+                                        -p "${HOST_PORT}:${CONTAINER_PORT}" \\
+                                        -v "${volume}:/app/data" \\
+                                        -e SPRING_PROFILES_ACTIVE=docker \\
+                                        -e SERVER_PORT="${CONTAINER_PORT}" \\
+                                        "${previousImage}" || true
+                                fi
+                                exit 1
+                            fi
                         """
                     } else {
                         bat """
@@ -187,6 +211,15 @@ pipeline {
                             @docker rm ${CONTAINER_NAME} 2>nul || ver >nul
                             @docker volume create ${volume} >nul
                             @docker run -d --name ${CONTAINER_NAME} --restart unless-stopped -p ${HOST_PORT}:${CONTAINER_PORT} -v ${volume}:/app/data -e SPRING_PROFILES_ACTIVE=docker -e SERVER_PORT=${CONTAINER_PORT} ${IMAGE_NAME}:%GIT_COMMIT_SHORT%
+                            @if errorlevel 1 (
+                                @echo ERROR: the new container failed to start - rolling back.
+                                @docker rm -f ${CONTAINER_NAME} 2>nul || ver >nul
+                                @if not "${previousImage}"=="" (
+                                    @echo Restoring previous image ${previousImage}...
+                                    @docker run -d --name ${CONTAINER_NAME} --restart unless-stopped -p ${HOST_PORT}:${CONTAINER_PORT} -v ${volume}:/app/data -e SPRING_PROFILES_ACTIVE=docker -e SERVER_PORT=${CONTAINER_PORT} ${previousImage} || ver >nul
+                                )
+                                @exit /b 1
+                            )
                         """
                     }
                 }
@@ -207,17 +240,37 @@ pipeline {
                             attempt=1
                             while [ "$attempt" -le 45 ]; do
                                 if response=$(curl --silent --fail "http://${HEALTH_HOST}:${HOST_PORT}/actuator/health" 2>/dev/null); then
-                                    if printf '%s' "$response" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"'; then
+                                    # Read the ROOT status only. Grepping the whole
+                                    # payload would also match the nested per-component
+                                    # statuses and would accept a DOWN application.
+                                    root_status=$(printf '%s' "$response" | sed -n 's/^{"status":"\\([^"]*\\)".*/\\1/p')
+                                    if [ "$root_status" = "UP" ]; then
                                         echo "Health check PASSED: application is UP."
                                         printf '%s\\n' "$response"
                                         exit 0
                                     fi
+                                    echo "Health check attempt ${attempt}: application reported '${root_status:-unparseable}' - waiting..."
                                 fi
                                 sleep 2
                                 attempt=$((attempt + 1))
                             done
                             echo "Health check FAILED. Container logs:"
                             docker logs --tail 100 "${CONTAINER_NAME}" || true
+
+                            # The replacement never became healthy, so put the
+                            # previously running image back to avoid an outage.
+                            if [ -n "${PREVIOUS_IMAGE:-}" ]; then
+                                echo "Rolling back to ${PREVIOUS_IMAGE}..."
+                                docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+                                docker run -d \\
+                                    --name "${CONTAINER_NAME}" \\
+                                    --restart unless-stopped \\
+                                    -p "${HOST_PORT}:${CONTAINER_PORT}" \\
+                                    -v "${RESOLVED_VOLUME:-${DATA_VOLUME}}:/app/data" \\
+                                    -e SPRING_PROFILES_ACTIVE=docker \\
+                                    -e SERVER_PORT="${CONTAINER_PORT}" \\
+                                    "${PREVIOUS_IMAGE}" || true
+                            fi
                             exit 1
                         '''
                     } else {
@@ -247,18 +300,79 @@ pipeline {
  * Reuse the named volume already mounted at /app/data on the running container,
  * so an existing database is never orphaned by a redeploy. Falls back to
  * DATA_VOLUME when there is no container yet.
+ *
+ * The discovery is platform neutral: the raw `docker inspect` JSON is parsed
+ * with JsonSlurper, so the Windows agent discovers the real volume too instead
+ * of assuming the default (which would silently attach an empty database).
  */
 def resolveDataVolume() {
-    if (!isUnix()) {
-        return env.DATA_VOLUME
-    }
-    def existing = sh(
-        script: """
-            if docker inspect "${env.CONTAINER_NAME}" >/dev/null 2>&1; then
-                docker inspect --format '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "${env.CONTAINER_NAME}"
-            fi
-        """,
-        returnStdout: true
-    ).trim()
+    def existing = currentContainerMount()
     return existing ? existing : env.DATA_VOLUME
+}
+
+/**
+ * Read the raw `docker inspect` output of the running container.
+ * Returns an empty string when the container does not exist or Docker is
+ * unreachable.
+ */
+def currentContainerInspect() {
+    def raw = ''
+    if (isUnix()) {
+        raw = sh(
+            script: 'docker inspect "${CONTAINER_NAME}" 2>/dev/null || true',
+            returnStdout: true
+        ).trim()
+    } else {
+        raw = bat(
+            script: '@docker inspect %CONTAINER_NAME% 2>nul || ver >nul',
+            returnStdout: true
+        ).trim()
+    }
+    return raw
+}
+
+/**
+ * Name (or host path) of the volume mounted at /app/data on the running
+ * container. Empty when nothing is mounted there.
+ */
+def currentContainerMount() {
+    def raw = currentContainerInspect()
+    if (!raw) {
+        return ''
+    }
+    def mounts = []
+    try {
+        def parsed = new groovy.json.JsonSlurper().parseText(raw)
+        parsed.each { container ->
+            (container.Mounts ?: []).each { mount ->
+                if (mount.Destination == '/app/data') {
+                    // Named volumes report Name; bind mounts report Source only.
+                    mounts << (mount.Name ?: mount.Source)
+                }
+            }
+        }
+    } catch (Exception parseError) {
+        echo "Could not parse the container mount list: ${parseError.message}"
+        return ''
+    }
+    return mounts ? mounts[0] : ''
+}
+
+/**
+ * Image the running container was started from. Empty when there is no
+ * running container, which means there is nothing to roll back to.
+ */
+def currentContainerImage() {
+    def raw = currentContainerInspect()
+    if (!raw) {
+        return ''
+    }
+    try {
+        def parsed = new groovy.json.JsonSlurper().parseText(raw)
+        def image = parsed[0]?.Config?.Image
+        return image ? image.toString() : ''
+    } catch (Exception parseError) {
+        echo "Could not parse the container image: ${parseError.message}"
+        return ''
+    }
 }

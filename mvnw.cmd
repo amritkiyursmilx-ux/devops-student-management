@@ -18,11 +18,13 @@
     @FOR %%i IN (java.exe) DO @SET "JAVACMD=%%~$PATH:i"
 )
 
-@IF "%JAVACMD%"=="" (
-    @IF EXIST "C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot\bin\java.exe" (
-        @SET "JAVACMD=C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot\bin\java.exe"
-    )
-)
+@REM Fall back to an installed Adoptium/Temurin JDK 21. The directory is
+@REM globbed rather than pinned to one patch build, so a JDK update does not
+@REM silently break the wrapper. "for /d" is required: a plain "for" only
+@REM matches files and would never find the JDK directory.
+@SET "MVNW_JAVA_HOME="
+@FOR /D %%d IN ("C:\Program Files\Eclipse Adoptium\jdk-21*") DO @IF EXIST "%%~d\bin\java.exe" @IF NOT DEFINED MVNW_JAVA_HOME @SET "MVNW_JAVA_HOME=%%~d"
+@IF DEFINED MVNW_JAVA_HOME @SET "JAVACMD=%MVNW_JAVA_HOME%\bin\java.exe"
 
 @IF "%JAVACMD%"=="" (
     @ECHO Error: JAVA_HOME is not set and no 'java' command was found in your PATH.
