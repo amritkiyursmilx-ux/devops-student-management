@@ -274,8 +274,9 @@ In Jenkins (`http://localhost:9090`):
    https://github.com/amritkiyursmilx-ux/devops-student-management.git
 4. Set **Branch Specifier** to ***/main** and **Script Path** to **Jenkinsfile** (the repository root).
 5. The repository is public, so no Jenkins credential is required. If it becomes private, select a credential from Jenkins Credentials; never paste a token into the Jenkinsfile.
-6. Under **Triggers**, tick **Poll SCM** and enter the schedule `H/5 * * * *` so a new push to `main` is picked up automatically every 5 minutes.
-7. Click **Save**.
+6. Click **Save**.
+
+> **Note on triggers**: the `Poll SCM` trigger is declared inside the `Jenkinsfile` itself (see the `triggers` block in `pipeline { }`), so it does **not** need to be ticked in the job UI. Declaring it in the pipeline is what keeps it alive - the Declarative job-property tracker deletes any job-level trigger that the pipeline definition does not declare.
 
 ### Step 4: Run the Pipeline
 1. Click **Build Now** in the left sidebar.
@@ -314,7 +315,21 @@ Two trigger options are available:
 
 **Poll SCM is the trigger configured in this project**, because the Jenkins server runs on `localhost` and GitHub cannot reach that address. The job is set to **Pipeline script from SCM** with branch `*/main`, so a new push to `main` is picked up automatically on the next poll.
 
-To switch to a webhook instead, enable **GitHub hook trigger for GITScm polling** in the job and add a GitHub push webhook pointing at the Jenkins URL above. Keep Jenkins behind an authenticated, protected endpoint, and always use Jenkins Credentials for secrets - never paste a token into the `Jenkinsfile`.
+The trigger is declared in the `Jenkinsfile` rather than only in the job UI:
+
+```groovy
+pipeline {
+    agent any
+    triggers {
+        pollSCM('H/5 * * * *')
+    }
+    // ...
+}
+```
+
+This matters for durability: the Declarative job-property tracker reconciles the job's properties at the end of every build and **deletes any trigger the pipeline definition does not declare**. A trigger configured only through the job UI therefore disappears after the first build.
+
+To switch to a webhook instead, replace the `pollSCM` line with `githubPush()` and add a GitHub push webhook pointing at `http://<reachable-jenkins-host>:9090/github-webhook/`. Keep Jenkins behind an authenticated, protected endpoint, and always use Jenkins Credentials for secrets - never paste a token into the `Jenkinsfile`.
 
 ---
 
