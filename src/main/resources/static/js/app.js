@@ -30,6 +30,23 @@ document.addEventListener('DOMContentLoaded', () => {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => performSearch(val), 300);
     });
+
+    // Delegated handler for the Edit / Delete action buttons.
+    // The student id travels in data-id and the name is read from allStudents,
+    // so user-supplied text is never embedded inside a JavaScript string.
+    document.getElementById('studentTableBody').addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-action]');
+        if (!btn) return;
+
+        const id = Number(btn.dataset.id);
+        const student = allStudents.find(s => s.id === id);
+
+        if (btn.dataset.action === 'edit') {
+            openEditModal(id);
+        } else if (btn.dataset.action === 'delete') {
+            openDeleteModal(id, student ? student.fullName : 'this student');
+        }
+    });
 });
 
 // ============================================================
@@ -100,10 +117,10 @@ function renderTable(students) {
             <td><span class="sem-badge">Sem ${s.semester}</span></td>
             <td class="text-center">
                 <div class="d-flex gap-2 justify-content-center">
-                    <button class="action-btn btn-edit" onclick="openEditModal(${s.id})" title="Edit">
+                    <button class="action-btn btn-edit" data-action="edit" data-id="${s.id}" title="Edit">
                         <i class="bi bi-pencil-fill"></i>
                     </button>
-                    <button class="action-btn btn-delete" onclick="openDeleteModal(${s.id}, '${escapeHtml(s.fullName)}')" title="Delete">
+                    <button class="action-btn btn-delete" data-action="delete" data-id="${s.id}" title="Delete">
                         <i class="bi bi-trash3-fill"></i>
                     </button>
                 </div>
