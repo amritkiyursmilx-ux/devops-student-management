@@ -301,7 +301,7 @@ body {
 
 .student-table tbody .student-name {
     font-weight: 600;
-    color: #1f2937;
+    color: #1f2937 !important;
 }
 
 .email-text {
