@@ -142,6 +142,7 @@ pipeline {
                 echo '=== Stage 6: Build Docker Image ==='
                 script {
                     if (isUnix()) {
+                        sh 'echo "DIAG-PATH=$PATH"; echo "DIAG-HOME=$HOME"; env | sort | sed "s/^/DIAG-ENV /"; command -v docker; docker --help 2>&1 | head -3; docker build --help 2>&1 | head -3'
                         sh 'docker build -t ${IMAGE_NAME}:b${BUILD_NUMBER} -t ${IMAGE_NAME}:${GIT_COMMIT_SHORT} -t ${IMAGE_NAME}:latest .'
                     } else {
                         bat 'docker build -t %IMAGE_NAME%:b%BUILD_NUMBER% -t %IMAGE_NAME%:%GIT_COMMIT_SHORT% -t %IMAGE_NAME%:latest .'
