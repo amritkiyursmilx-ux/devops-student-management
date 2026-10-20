@@ -102,6 +102,7 @@ function renderTable(students) {
         tbody.innerHTML = '';
         table.style.display = 'none';
         empty.style.display = 'block';
+        updateResultCount(0);
         return;
     }
 
@@ -117,17 +118,32 @@ function renderTable(students) {
             <td><span class="sem-badge">Sem ${s.semester}</span></td>
             <td class="text-center">
                 <div class="d-flex gap-2 justify-content-center">
-                    <button class="action-btn btn-edit" data-action="edit" data-id="${s.id}" title="Edit">
-                        <i class="bi bi-pencil-fill"></i>
+                    <button class="action-btn btn-edit" data-action="edit" data-id="${s.id}" title="Edit ${escapeHtml(s.fullName)}" aria-label="Edit ${escapeHtml(s.fullName)}">
+                        <i class="bi bi-pencil-fill" aria-hidden="true"></i>
                     </button>
-                    <button class="action-btn btn-delete" data-action="delete" data-id="${s.id}" title="Delete">
-                        <i class="bi bi-trash3-fill"></i>
+                    <button class="action-btn btn-delete" data-action="delete" data-id="${s.id}" title="Delete ${escapeHtml(s.fullName)}" aria-label="Delete ${escapeHtml(s.fullName)}">
+                        <i class="bi bi-trash3-fill" aria-hidden="true"></i>
                     </button>
                 </div>
             </td>
         </tr>
     `).join('');
+
+    updateResultCount(students.length);
 }
+
+/**
+ * Show how many records are currently listed next to the table heading.
+ */
+function updateResultCount(count) {
+    const el = document.getElementById('resultCount');
+    if (!el) return;
+    const total = allStudents.length;
+    el.textContent = total > 0 && count !== total
+        ? `${count} of ${total}`
+        : `${count} ${count === 1 ? 'record' : 'records'}`;
+}
+
 
 // ============================================================
 // Stats
@@ -349,16 +365,53 @@ function escapeHtml(str) {
 }
 
 function showTableLoading(show) {
-    const loading = document.getElementById('loadingRow');
-    if (loading) loading.style.display = show ? '' : 'none';
+    const tbody = document.getElementById('studentTableBody');
+    if (!tbody) return;
+
+    if (show) {
+        // Skeleton rows keep the table height stable while data loads.
+        const skeletonRows = Array.from({ length: 5 }, () => `
+            <tr aria-hidden="true">
+                <td><span class="skeleton-cell skeleton-cell-sm"></span></td>
+                <td><span class="skeleton-cell skeleton-cell-lg"></span></td>
+                <td><span class="skeleton-cell skeleton-cell-md"></span></td>
+                <td><span class="skeleton-cell skeleton-cell-md"></span></td>
+                <td><span class="skeleton-cell skeleton-cell-sm"></span></td>
+                <td class="text-center"><span class="skeleton-cell skeleton-cell-sm d-inline-block"></span></td>
+            </tr>`).join('');
+        tbody.innerHTML = skeletonRows;
+        tbody.setAttribute('aria-busy', 'true');
+
+        // Keep the table visible and the empty state hidden while loading.
+        const table = document.getElementById('studentTable');
+        const empty = document.getElementById('emptyState');
+        if (table) table.style.display = '';
+        if (empty) empty.style.display = 'none';
+    } else {
+        tbody.removeAttribute('aria-busy');
+    }
 }
 
 function showTableError(message) {
-    document.getElementById('studentTableBody').innerHTML = `
-        <tr><td colspan="6" class="text-center py-5 text-danger">
-            <i class="bi bi-exclamation-circle fs-3 d-block mb-2"></i>${escapeHtml(message)}
-        </td></tr>`;
+    const tbody = document.getElementById('studentTableBody');
+    if (!tbody) return;
+
+    tbody.removeAttribute('aria-busy');
+    tbody.innerHTML = `
+        <tr>
+            <td colspan="6" class="py-5">
+                <div class="table-state table-state-error">
+                    <i class="bi bi-exclamation-triangle-fill table-state-icon" aria-hidden="true"></i>
+                    <div class="table-state-title">Could not load students</div>
+                    <p class="table-state-text">${escapeHtml(message)}</p>
+                    <button type="button" class="btn btn-secondary-custom" onclick="loadStudents()">
+                        <i class="bi bi-arrow-clockwise me-1" aria-hidden="true"></i>Try again
+                    </button>
+                </div>
+            </td>
+        </tr>`;
 }
+
 
 function setSaveLoading(loading) {
     const btn     = document.getElementById('saveBtn');
