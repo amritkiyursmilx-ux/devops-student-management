@@ -247,18 +247,13 @@ In Jenkins (`http://localhost:8085`):
 3. **Maven**: Click *Add Maven*, name it `Maven3`, and check *Install automatically* (select version 3.9.x).
 
 ### Step 3: Create the Pipeline Job
-1. Click **New Item** on the Jenkins home page.
-2. Enter item name: `student-management-pipeline`, select **Pipeline**, and click **OK**.
-3. In the Job Configuration page:
-   - Scroll down to the **Pipeline** section.
-   - Select **Pipeline script from SCM**.
-   - SCM: **Git**
-   - Repository URL: Enter your GitHub repository URL (or local Git directory path `file:///D:/robot_simulation/devops/student-management`).
-   - Branch Specifier: `*/master`
-   - Script Path: `Jenkinsfile`
-4. Click **Save**.
-
-### Step 4: Run the Pipeline
+1. Click **New Item**, enter **student-management-pipeline**, choose **Pipeline**, and click **OK**.
+2. Under **Pipeline**, set **Definition** to **Pipeline script from SCM**.
+3. Set **SCM** to **Git** and **Repository URL** to:
+   https://github.com/amritkiyursmilx-ux/devops-student-management.git
+4. Set **Branch Specifier** to ***/main** and **Script Path** to **Jenkinsfile** (the repository root).
+5. The repository is public, so no Jenkins credential is required. If it becomes private, select a credential from Jenkins Credentials; never paste a token into the Jenkinsfile.
+6. Click **Save**.### Step 4: Run the Pipeline
 1. Click **Build Now** in the left sidebar.
 2. Observe each stage progress in the **Stage View**:
    - `Checkout` ➔ `Build & Compile` ➔ `Execute Tests` ➔ `Package JAR` ➔ `Docker Build` ➔ `Docker Deploy` ➔ `Health Check`.
@@ -268,23 +263,9 @@ In Jenkins (`http://localhost:8085`):
 
 ## 12. GitHub Integration & Automated Triggers
 
-To trigger builds automatically on every `git push`:
-1. Push your repository to GitHub:
-   ```powershell
-   git remote add origin https://github.com/<your-username>/student-management.git
-   git branch -M master
-   git push -u origin master
-   ```
-2. In your GitHub repository, navigate to **Settings > Webhooks > Add webhook**:
-   - Payload URL: `http://<your-public-or-ngrok-ip>:8085/github-webhook/`
-   - Content type: `application/json`
-   - Events: `Just the push event`
-3. In Jenkins job configuration:
-   - Under **Build Triggers**, check **GitHub hook trigger for GITScm polling**.
+The project remote is https://github.com/amritkiyursmilx-ux/devops-student-management.git, on branch **main**. Configure the Jenkins job to use **Pipeline script from SCM**, branch ***/main**, and script path **Jenkinsfile**.
 
----
-
-## 13. Testing Instructions
+To trigger builds automatically, enable **GitHub hook trigger for GITScm polling** in the job and configure a GitHub push webhook at http://<reachable-jenkins-host>:9090/github-webhook/. GitHub must be able to reach that address; localhost is not reachable from GitHub. For a Jenkins server that stays local, use **Poll SCM** instead. Keep Jenkins behind an authenticated, protected endpoint.## 13. Testing Instructions
 
 ### Executing Automated Tests
 ```powershell
@@ -352,3 +333,92 @@ Maven writes XML and text test reports to:
 2. **Static Code Analysis**: Integrate **SonarQube** in the Jenkins pipeline to enforce code quality and security scanning.
 3. **Container Vulnerability Scanning**: Add **Trivy** scanning stage before Docker image deployment.
 4. **Cloud Deployment**: Automate pushing container images to Docker Hub or AWS ECR and deploying to AWS ECS / Google Cloud Run.
+
+---
+
+## 13. Testing Instructions
+
+### Run Unit & Integration Tests (Locally)
+```powershell
+cd student-management
+.\mvnw.cmd test
+```
+
+### Run Tests with Coverage Report
+```powershell
+cd student-management
+.\mvnw.cmd test jacoco:report  # If JaCoCo is configured
+```
+
+### Test Reports
+- **Surefire Reports**: `target/surefire-reports/*.xml` and `*.txt`
+- **Jenkins**: JUnit results are published automatically in the pipeline
+
+### Manual API Testing (curl/PowerShell)
+```powershell
+# Get all students
+Invoke-RestMethod -Uri http://localhost:8081/api/students
+
+# Get student count
+Invoke-RestMethod -Uri http://localhost:8081/api/students/count
+
+# Search students
+Invoke-RestMethod -Uri "http://localhost:8081/api/students/search?query=John"
+
+# Health check
+Invoke-RestMethod -Uri http://localhost:8081/actuator/health
+```
+
+---
+
+## 14. Expected Outputs
+
+| Action | Expected Result |
+|---|---|
+| `mvnw.cmd clean compile` | `BUILD SUCCESS` - All 6 source files compiled |
+| `mvnw.cmd test` | `BUILD SUCCESS` - 17 tests run (8 service + 9 controller), 0 failures |
+| `mvnw.cmd package` | `BUILD SUCCESS` - `target/student-management-1.0.0.jar` created |
+| `docker build` | Successfully built image `student-management:1.0.0` |
+| `docker compose up -d` | Container `student-management-app` starts and becomes healthy |
+| `http://localhost:8081/actuator/health` | `{"status":"UP", "components":{"db":{"status":"UP"},...}}` |
+| `http://localhost:8081/api/students/count` | JSON with total student count |
+| `http://localhost:8081` | Bootstrap UI loads with dashboard, table, and CRUD functionality |
+
+---
+
+## 15. Common Errors and Solutions
+
+| Error | Cause | Solution |
+|---|---|---|
+| `mvn` not found | Maven not on PATH | Use `mvnw.cmd` (Maven Wrapper) instead of `mvn` |
+| Port 8081 already in use | Another process using port | Stop the process or change port in `docker-compose.yml` |
+| Docker build fails - JAR not found | JAR not packaged yet | Run `mvnw.cmd package -DskipTests` before building image |
+| Container fails to start | Wrong profile or volume issues | Ensure `SPRING_PROFILES_ACTIVE=docker` and volume mounted to `/app/data` |
+| Jenkins can't access Docker | Docker Desktop socket access issue on Windows | Use the provided `jenkins/` Docker setup with socket mounted, or run Jenkins in container. Note: Windows Jenkins service may not have Docker access. |
+| Tests fail in pipeline | Code changes break tests | Fix failing tests locally with `mvnw.cmd test` before pushing |
+| H2 data lost after container recreation | Volume not mounted | Ensure named volume `student-data` or `student-management_data` is mounted to `/app/data` |
+| Health check fails | App still starting | Increase wait time in health check (app needs ~20-30s to start) |
+
+---
+
+## 16. Future Enhancements
+
+- **Authentication & Authorization**: Add Spring Security with role-based access control
+- **Pagination & Sorting**: Implement pagination for large student datasets
+- **REST API Documentation**: Integrate Swagger/OpenAPI for API documentation
+- **Database Migration**: Use Flyway/Liquibase for schema version control
+- **Cloud Deployment**: Deploy to AWS/Azure using ECS or App Service
+- **Kubernetes Orchestration**: Scale using Kubernetes manifests (Helm charts)
+- **CI/CD Improvements**: Add SonarQube for code quality, Trivy for container scanning
+- **Email Notifications**: Add email alerts for pipeline failures
+- **Frontend Enhancement**: Migrate to a modern SPA framework if needed
+
+---
+
+## Important Notes
+
+- **Port Mapping**: Application is accessible at `http://localhost:8081` (host) with container listening on port `8080`.
+- **Data Persistence**: H2 database is stored in a Docker volume (`/app/data`) ensuring data survives container recreation.
+- **Downtime Limitation**: Replacing a single local container causes brief downtime during deployment. This setup does **not** implement zero-downtime deployment.
+- **Health Monitoring**: Spring Boot Actuator health endpoint (`/actuator/health`) is exposed for monitoring and pipeline verification.
+- **Security**: Use Jenkins credentials store for any secrets/tokens. Never hardcode credentials in `Jenkinsfile` or source code.

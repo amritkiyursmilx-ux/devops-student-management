@@ -1,168 +1,185 @@
 pipeline {
     agent any
 
-    environment {
-        APP_NAME        = 'student-management'
-        IMAGE_NAME      = 'student-management'
-        CONTAINER_NAME  = 'student-management-app'
-        PORT            = '8080'
+    options {
+        skipDefaultCheckout(true)
+        timestamps()
+        disableConcurrentBuilds()
     }
 
-    // Java 21, Maven 3.9, and Docker CLI are pre-installed in the Jenkins environment
-    // tools {
-    //     jdk 'JDK21'
-    //     maven 'Maven3'
-    // }
+    parameters {
+        booleanParam(
+            name: 'DEPLOY',
+            defaultValue: false,
+            description: 'Replace the running student-management-app container after the build succeeds. Requires approval.'
+        )
+    }
+
+    environment {
+        IMAGE_NAME     = 'student-management'
+        CONTAINER_NAME = 'student-management-app'
+        HOST_PORT      = '8081'
+        CONTAINER_PORT = '8080'
+        DATA_VOLUME    = 'student-management_data'
+    }
 
     stages {
-        // -------------------------------------------------------------
-        // Stage 1: Checkout Source Code
-        // -------------------------------------------------------------
         stage('Checkout') {
             steps {
-                echo '=== Stage 1: Checking out source code from Git repository ==='
+                echo 'Checking out the configured GitHub branch.'
                 checkout scm
-            }
-        }
-
-        // -------------------------------------------------------------
-        // Stage 2: Compile Application
-        // -------------------------------------------------------------
-        stage('Build & Compile') {
-            steps {
-                echo '=== Stage 2: Compiling Java source code ==='
                 script {
                     if (isUnix()) {
-                        sh 'mvn clean compile'
+                        env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                     } else {
-                        bat 'mvn clean compile'
+                        env.GIT_COMMIT_SHORT = bat(script: '@git rev-parse --short HEAD', returnStdout: true).trim()
                     }
                 }
             }
         }
 
-        // -------------------------------------------------------------
-        // Stage 3: Automated Unit and Integration Tests
-        // -------------------------------------------------------------
-        stage('Execute Tests') {
+        stage('Build & Compile') {
             steps {
-                echo '=== Stage 3: Running automated unit and integration tests ==='
+                echo 'Building from the repository root with the agent-installed Maven.'
                 script {
                     if (isUnix()) {
-                        sh 'mvn test'
+                        sh 'mvn --batch-mode --no-transfer-progress clean compile'
                     } else {
-                        bat 'mvn test'
+                        bat 'mvn --batch-mode --no-transfer-progress clean compile'
+                    }
+                }
+            }
+        }
+
+        stage('Execute Tests') {
+            steps {
+                echo 'Running the automated unit and web-layer tests.'
+                script {
+                    if (isUnix()) {
+                        sh 'mvn --batch-mode --no-transfer-progress test'
+                    } else {
+                        bat 'mvn --batch-mode --no-transfer-progress test'
                     }
                 }
             }
             post {
                 always {
-                    // Record test results for Jenkins UI dashboard
                     junit testResults: 'target/surefire-reports/*.xml', allowEmptyResults: true
                 }
             }
         }
 
-        // -------------------------------------------------------------
-        // Stage 4: Package Runnable JAR
-        // -------------------------------------------------------------
         stage('Package JAR') {
             steps {
-                echo '=== Stage 4: Packaging application into executable Spring Boot JAR ==='
+                echo 'Packaging the executable Spring Boot JAR.'
                 script {
                     if (isUnix()) {
-                        sh 'mvn package -DskipTests'
+                        sh 'mvn --batch-mode --no-transfer-progress package -DskipTests'
                     } else {
-                        bat 'mvn package -DskipTests'
+                        bat 'mvn --batch-mode --no-transfer-progress package -DskipTests'
                     }
                 }
             }
             post {
                 success {
-                    // Archive production JAR artifact
-                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                    archiveArtifacts artifacts: 'target/student-management-1.0.0.jar', fingerprint: true
                 }
             }
         }
 
-        // -------------------------------------------------------------
-        // Stage 5: Build Docker Container Image
-        // -------------------------------------------------------------
         stage('Docker Build') {
             steps {
-                echo '=== Stage 5: Building Docker Image ==='
+                echo 'Building commit-specific and build-number Docker tags.'
                 script {
-                    def imageTag = "${IMAGE_NAME}:${BUILD_NUMBER}"
-                    def latestTag = "${IMAGE_NAME}:latest"
                     if (isUnix()) {
-                        sh "docker build -t ${imageTag} -t ${latestTag} ."
+                        sh 'docker build -t ${IMAGE_NAME}:b${BUILD_NUMBER} -t ${IMAGE_NAME}:${GIT_COMMIT_SHORT} -t ${IMAGE_NAME}:latest .'
                     } else {
-                        bat "docker build -t ${imageTag} -t ${latestTag} ."
+                        bat 'docker build -t %IMAGE_NAME%:b%BUILD_NUMBER% -t %IMAGE_NAME%:%GIT_COMMIT_SHORT% -t %IMAGE_NAME%:latest .'
                     }
                 }
             }
         }
 
-        // -------------------------------------------------------------
-        // Stage 6: Deploy Container Locally
-        // -------------------------------------------------------------
         stage('Docker Deploy') {
+            when {
+                expression { params.DEPLOY }
+            }
             steps {
-                echo '=== Stage 6: Deploying Docker container to local environment ==='
                 script {
-                    if (isUnix()) {
-                        sh """
-                            docker stop ${CONTAINER_NAME} || true
-                            docker rm ${CONTAINER_NAME} || true
-                            docker run -d --name ${CONTAINER_NAME} -p ${PORT}:8080 ${IMAGE_NAME}:latest
-                        """
-                    } else {
-                        bat """
-                            docker stop ${CONTAINER_NAME} 2>nul || ver >nul
-                            docker rm ${CONTAINER_NAME} 2>nul || ver >nul
-                            docker run -d --name ${CONTAINER_NAME} -p ${PORT}:8080 ${IMAGE_NAME}:latest
-                        """
+                    if (!isUnix()) {
+                        error('Deployment requires the configured Linux Jenkins container agent.')
                     }
                 }
+                timeout(time: 5, unit: 'MINUTES') {
+                    input message: 'This will stop and replace the running student-management-app container on port 8081. Continue?', ok: 'Deploy'
+                }
+                sh '''
+                    set -eu
+
+                    selected_volume="$DATA_VOLUME"
+                    if docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+                        existing_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$CONTAINER_NAME")
+                        if [ -n "$existing_volume" ]; then
+                            selected_volume="$existing_volume"
+                        fi
+                    fi
+
+                    docker volume create "$selected_volume" >/dev/null
+
+                    if docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+                        docker stop "$CONTAINER_NAME"
+                        docker rm "$CONTAINER_NAME"
+                    fi
+
+                    docker run -d \\
+                        --name "$CONTAINER_NAME" \\
+                        --restart unless-stopped \\
+                        -p "$HOST_PORT:$CONTAINER_PORT" \\
+                        -v "$selected_volume:/app/data" \\
+                        -e SPRING_PROFILES_ACTIVE=docker \\
+                        -e SERVER_PORT="$CONTAINER_PORT" \\
+                        "$IMAGE_NAME:$GIT_COMMIT_SHORT"
+                '''
             }
         }
 
-        // -------------------------------------------------------------
-        // Stage 7: Health Check Verification
-        // -------------------------------------------------------------
         stage('Health Check') {
+            when {
+                expression { params.DEPLOY }
+            }
             steps {
-                echo '=== Stage 7: Verifying application deployment health ==='
-                script {
-                    echo 'Waiting 20 seconds for container startup...'
-                    sleep time: 20, unit: 'SECONDS'
-                    if (isUnix()) {
-                        sh """
-                            curl -s -f http://localhost:${PORT}/actuator/health || exit 1
-                        """
-                    } else {
-                        bat """
-                            powershell -Command "try { \$res = Invoke-RestMethod -Uri 'http://localhost:${PORT}/actuator/health' -TimeoutSec 10; if (\$res.status -eq 'UP') { Write-Host 'Health Check PASSED: Application is UP'; exit 0 } else { Write-Error 'Application reported status not UP'; exit 1 } } catch { Write-Error \$_; exit 1 }"
-                        """
-                    }
-                }
+                echo 'Waiting up to 60 seconds for the deployed app to report UP.'
+                sh '''
+                    set -eu
+                    attempt=1
+                    while [ "$attempt" -le 30 ]; do
+                        if response=$(curl --silent --show-error --fail "http://localhost:$HOST_PORT/actuator/health" 2>/dev/null); then
+                            if printf '%s' "$response" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"'; then
+                                printf '%s\\n' "$response"
+                                exit 0
+                            fi
+                        fi
+                        sleep 2
+                        attempt=$((attempt + 1))
+                    done
+                    docker logs --tail 80 "$CONTAINER_NAME" || true
+                    echo 'Health check failed.'
+                    exit 1
+                '''
             }
         }
     }
 
-    // -----------------------------------------------------------------
-    // Post-Pipeline Actions & Notifications
-    // -----------------------------------------------------------------
     post {
         always {
+            deleteDir()
             echo 'Pipeline execution completed.'
-            cleanWs deleteDirs: true, notFailBuild: true, patterns: [[pattern: 'target/**', type: 'EXCLUDE']]
         }
         success {
-            echo "🎉 PIPELINE SUCCESS: ${env.JOB_NAME} [Build #${env.BUILD_NUMBER}] successfully built, tested, containerized, and deployed!"
+            echo "PIPELINE SUCCESS: ${env.JOB_NAME} [Build #${env.BUILD_NUMBER}] completed."
         }
         failure {
-            echo "❌ PIPELINE FAILED: ${env.JOB_NAME} [Build #${env.BUILD_NUMBER}] encountered an error. Please inspect logs."
+            echo "PIPELINE FAILED: ${env.JOB_NAME} [Build #${env.BUILD_NUMBER}]. Inspect the stage logs."
         }
     }
 }
