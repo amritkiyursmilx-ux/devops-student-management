@@ -15,6 +15,17 @@ pipeline {
         )
     }
 
+    triggers {
+        // Poll GitHub every 5 minutes for new commits on the branch tracked by
+        // the job SCM. A webhook trigger would be the alternative, but it
+        // requires GitHub to reach this Jenkins instance, which is not
+        // possible while it runs on localhost. Declaring the trigger here
+        // (rather than only in the job UI) keeps it alive: the Declarative
+        // job-property tracker removes job-level triggers that the pipeline
+        // definition does not declare.
+        pollSCM('H/5 * * * *')
+    }
+
     environment {
         IMAGE_NAME     = 'student-management'
         CONTAINER_NAME = 'student-management-app'
