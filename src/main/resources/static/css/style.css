@@ -299,7 +299,8 @@ body {
     color: var(--accent-blue);
 }
 
-.student-name { font-weight: 600; color: #ef4444; }
+.student-name { font-weight: 600; color: #ef4444 !important; }
+.student-table tbody td .student-name { font-weight: 600; color: #ef4444 !important; }
 
 .email-text {
     color: var(--text-secondary);
