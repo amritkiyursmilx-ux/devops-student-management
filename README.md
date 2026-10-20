@@ -132,7 +132,13 @@ student-management/
 ├── Jenkinsfile                    # Declarative multi-stage CI/CD pipeline
 ├── env.bat / env.ps1              # JDK 21 auto-detect helpers for the local shell
 ├── mvnw / mvnw.cmd                # Maven wrapper for Linux agents / Windows
-└── pom.xml                        # Maven project dependencies and build plugins
+├── jenkins/
+│   ├── Dockerfile                   # Jenkins server container spec
+│   ├── docker-compose.yml           # Jenkins Compose specification
+│   ├── bootstrap.ps1                # Start Jenkins, print admin password
+│   ├── start-jenkins.bat            # Start Jenkins (Windows)
+│   └── stop-jenkins.bat             # Stop Jenkins (Windows)
+└── pom.xml                          # Maven project dependencies and build plugins
 ```
 
 ---
@@ -175,8 +181,14 @@ Docker Desktop on Windows 11 requires the Windows Subsystem for Linux (WSL 2) ba
 Jenkins runs as a container in this project, with the Docker socket mounted so the pipeline can build and deploy images:
 
 ```powershell
-cd d:\robot_simulation\devops\jenkins
+cd jenkins
 docker compose up -d
+```
+
+Or use the bootstrap script, which starts Jenkins, waits for it to become healthy, and prints the initial admin password:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File jenkins/bootstrap.ps1
 ```
 
 This publishes Jenkins on `http://localhost:9090` (agent port `50000`) and mounts `/var/run/docker.sock` into the container. Wait for the container to report healthy, then open `http://localhost:9090`, unlock it with the initial admin password from the container log, and complete the setup wizard:
@@ -200,10 +212,7 @@ Note: a natively installed Jenkins on Windows cannot reach the Docker Desktop Li
 
 ### Using Maven Wrapper (No Maven installation required)
 ```powershell
-# Navigate to the project directory
-cd d:\robot_simulation\devops\student-management
-
-# Run Spring Boot
+# Run from the repository root
 .\mvnw.cmd spring-boot:run
 ```
 
@@ -227,9 +236,7 @@ Access the application in your browser:
 
 ### 1. Build the Docker Image
 ```powershell
-cd d:\robot_simulation\devops\student-management
-
-# Build Docker container image
+# Build from the repository root
 docker build -t student-management:1.0.0 -t student-management:latest .
 ```
 ### 2. Run the Docker Container
