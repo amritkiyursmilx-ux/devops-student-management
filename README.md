@@ -1,6 +1,6 @@
 # DevOps Pipeline for Automated Java Application Release Using Jenkins and Docker
 
-> **Academic Mini-Project**  
+> **Academic DevOps-Project**  
 > **Domain**: DevOps, Continuous Integration / Continuous Deployment (CI/CD), Cloud-Native Application Development  
 > **Target Environment**: Windows 11 / Antigravity IDE  
 
