@@ -8,7 +8,7 @@
 
 ## 1. Project Overview
 
-This project implements a complete, automated end-to-end CI/CD release pipeline for a cloud-ready **Student Management System** built with **Java 21**, **Spring Boot 3**, and **Bootstrap 5**.
+This project implements a complete, automated end-to-end CI/CD release pipeline for **Student Management System** built with **Java 21**, **Spring Boot 3**, and **Bootstrap 5**.
 
 Whenever a developer pushes code changes to the Git repository, the automated Jenkins pipeline triggers a multi-stage release cycle that compiles the source code, runs automated unit and integration tests, packages a standalone executable JAR, builds an optimized Docker container image, deploys the container, and verifies health status via Spring Boot Actuator endpoints.
 
@@ -368,7 +368,7 @@ cd student-management
 .\mvnw.cmd test
 ```
 
-### Run the Full Verify Lifecycle (what the pipeline runs)
+### Run Full Maven Verification Locally
 
 ```powershell
 .\mvnw.cmd clean verify
